@@ -16,8 +16,11 @@
 # You should have received a copy of the GNU Lesser General Public License along
 # with BigBlueButton; if not, see <http://www.gnu.org/licenses/>.
 
+require 'bbb_api'
+
 class Room < ApplicationRecord
   include ::APIConcern
+  include ::BbbApi
 
   before_create :setup
 
@@ -27,7 +30,6 @@ class Room < ApplicationRecord
 
   belongs_to :owner, class_name: 'User', foreign_key: :user_id
 
-  RETURNCODE_SUCCESS = "SUCCESS"
   META_LISTED = "gl-listed"
 
   # Determines if a user owns a room.
@@ -65,9 +67,9 @@ class Room < ApplicationRecord
       unless meeting[:messageKey] == 'duplicateWarning'
         update_attributes(sessions: sessions + 1, last_session: DateTime.now)
       end
-    rescue BigBlueButton::BigBlueButtonException => exc
-      puts "BigBlueButton failed on create: #{exc.key}: #{exc.message}"
-      raise exc
+    rescue BigBlueButton::BigBlueButtonException => e
+      puts "BigBlueButton failed on create: #{e.key}: #{e.message}"
+      raise e
     end
   end
 
@@ -119,15 +121,16 @@ class Room < ApplicationRecord
   end
 
   # Fetches all recordings for a room.
-  def recordings
+  def recordings(search_params = {}, ret_search_params = false)
     res = bbb.get_recordings(meetingID: bbb_id)
 
-    format_recordings(res)
+    format_recordings(res, search_params, ret_search_params)
   end
 
   # Fetches a rooms public recordings.
-  def public_recordings
-    recordings.select { |r| r[:metadata][:"gl-listed"] == "true" }
+  def public_recordings(search_params = {}, ret_search_params = false)
+    search, order_col, order_dir, recs = recordings(search_params, ret_search_params)
+    [search, order_col, order_dir, recs.select { |r| r[:metadata][:"gl-listed"] == "true" }]
   end
 
   def update_recording(record_id, meta)

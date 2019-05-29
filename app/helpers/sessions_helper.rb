@@ -31,8 +31,22 @@ module SessionsHelper
 
   # If email verification is disabled, or the user has verified, go to their room
   def check_email_verified(user)
-    if !Rails.configuration.enable_email_verification || user.email_verified
-      redirect_to user.main_room
+    # Admin users should be redirected to the admin page
+    if user.has_role? :super_admin
+      redirect_to admins_path
+    elsif user.activated?
+      # Dont redirect to any of these urls
+      dont_redirect_to = [root_url, signin_url, signup_url, unauthorized_url, internal_error_url, not_found_url]
+      url = if cookies[:return_to] && !dont_redirect_to.include?(cookies[:return_to])
+        cookies[:return_to]
+      else
+        user.main_room
+      end
+
+      # Delete the cookie if it exists
+      cookies.delete :return_to if cookies[:return_to]
+
+      redirect_to url
     else
       redirect_to resend_path
     end
@@ -48,24 +62,28 @@ module SessionsHelper
     @current_user ||= User.find_by(id: session[:user_id])
   end
 
-  def generate_checksum(customer_name, redirect_url, secret)
-    string = customer_name + redirect_url + secret
-    OpenSSL::Digest.digest('sha1', string).unpack("H*").first
+  def generate_checksum(user_domain, redirect_url, secret)
+    string = user_domain + redirect_url + secret
+    OpenSSL::Digest.digest('sha1', string).unpack1("H*")
   end
 
-  def parse_customer_name(hostname)
-    provider = hostname.split('.')
-    provider.first == 'www' ? provider.second : provider.first
+  def parse_user_domain(hostname)
+    return hostname.split('.').first if Rails.configuration.url_host.empty?
+    Rails.configuration.url_host.split(',').each do |url_host|
+      return hostname.chomp(url_host).chomp('.') if hostname.include?(url_host)
+    end
+    ''
   end
 
   def omniauth_options(env)
     gl_redirect_url = (Rails.env.production? ? "https" : env["rack.url_scheme"]) + "://" + env["SERVER_NAME"] + ":" +
-        env["SERVER_PORT"]
-    env['omniauth.strategy'].options[:customer] = parse_customer_name env["SERVER_NAME"]
+                      env["SERVER_PORT"]
+    user_domain = parse_user_domain(env["SERVER_NAME"])
+    env['omniauth.strategy'].options[:customer] = user_domain
     env['omniauth.strategy'].options[:gl_redirect_url] = gl_redirect_url
     env['omniauth.strategy'].options[:default_callback_url] = Rails.configuration.gl_callback_url
-    env['omniauth.strategy'].options[:checksum] = generate_checksum parse_customer_name(env["SERVER_NAME"]),
-      gl_redirect_url, Rails.configuration.launcher_secret
+    env['omniauth.strategy'].options[:checksum] = generate_checksum(user_domain, gl_redirect_url,
+      Rails.configuration.launcher_secret)
   end
 
   def google_omniauth_hd(env, hd)
